@@ -46,4 +46,7 @@ app-example
 
 .env
 .env.*
-test-label.jpg
+test-label*.jpg
+test-label*.jpeg
+test-label*.png
+test-label*.avif
