@@ -1,6 +1,12 @@
 // lib/ocrPost.ts
-// Step 3: Extract value+unit candidates (input-assist only).
+// Step 3/4: OCR post-processing (input-assist only).
+// Step 3: value+unit candidates
+// Step 4: attach left-hand label phrase per candidate
 // Scope: NO nutrient mapping, NO per-serve/per-100g logic, NO UI wiring.
+//
+// MVP POLICY: ship WITHOUT Daily Values.
+// - Skip DV boilerplate/table lines.
+// - Drop % candidates entirely.
 
 type Vertex = { x?: number; y?: number };
 
@@ -20,6 +26,10 @@ export type ValueUnitCandidate = {
   unit: string;      // "mg" | "g" | "kJ" | "kcal" | "%" | "" (unitless)
   line: string;      // reconstructed line text (original)
   lineIndex: number;
+};
+
+export type LabeledValueUnitCandidate = ValueUnitCandidate & {
+  label: string;     // e.g. "Sodium", "Total Fat", "Vitamin C"
 };
 
 type Token = {
@@ -65,7 +75,10 @@ function median(nums: number[]): number {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
-type BuiltLine = { text: string };
+type BuiltLine = {
+  text: string;      // joined token text
+  tokens: Token[];   // x-sorted tokens for label attachment
+};
 
 function buildLinesFromTokens(tokens: Token[]): BuiltLine[] {
   if (tokens.length === 0) return [];
@@ -105,13 +118,13 @@ function buildLinesFromTokens(tokens: Token[]): BuiltLine[] {
   return lines
     .sort((a, b) => a.yRef - b.yRef)
     .map((line) => {
-      line.tokens.sort((a, b) => a.xMin - b.xMin);
-      const text = line.tokens
+      const lineTokens = [...line.tokens].sort((a, b) => a.xMin - b.xMin);
+      const text = lineTokens
         .map((t) => t.text)
         .join(" ")
         .replace(/\s+/g, " ")
         .trim();
-      return { text };
+      return { text, tokens: lineTokens };
     })
     .filter((l) => l.text.length > 0);
 }
@@ -126,16 +139,195 @@ function normalizeUnit(u: string): string {
 }
 
 function normalizeLineForExtraction(line: string): string {
-  // 1) Remove thousands separators: 2,000 -> 2000
+  // Remove thousands separators: 2,000 -> 2000
   let s = line.replace(/(\d),(?=\d{3}\b)/g, "$1");
-
-  // 2) Fix common OCR: "Omg" -> "0mg" (O mistaken for zero)
-  // Keep this narrow: only for exact "Omg"/"O mg" patterns.
+  // Common OCR: "Omg" -> "0mg"
   s = s.replace(/\bO\s*mg\b/gi, "0mg");
-
   return s;
 }
 
+function normalizeTokenTextForExtraction(tokenText: string): string {
+  let s = tokenText.trim();
+  // Remove thousands separators inside tokens
+  s = s.replace(/(\d),(?=\d{3}\b)/g, "$1");
+  // Omg -> 0mg
+  s = s.replace(/\bO\s*mg\b/gi, "0mg");
+  return s;
+}
+
+function isNumberOnly(s: string): boolean {
+  return /^\d+(?:\.\d+)?$/.test(s);
+}
+
+function isUnitOnly(s: string): boolean {
+  // Keep % here as a boundary token for label extraction,
+  // even though we will DROP % candidates from output.
+  return /^(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)$/i.test(s.trim());
+}
+
+function isWordLike(s: string): boolean {
+  // allow letters and common connectors
+  return /[A-Za-z]/.test(s) && !isUnitOnly(s);
+}
+
+/**
+ * Daily Values boilerplate/table lines are high-noise and not shipped in MVP.
+ * This also kills the "Sad Fat / Less than ..." DV table artifacts.
+ */
+function isDailyValuesNoise(originalLineText: string): boolean {
+  const s = normalizeLineForExtraction(originalLineText).toLowerCase();
+
+  // DV boilerplate
+  if (s.includes("daily value")) return true;
+  if (s.includes("daily values")) return true;
+  if (s.includes("percent daily values")) return true;
+  if (s.includes("calorie diet")) return true;
+  if (s.includes("caloric needs")) return true;
+  if (s.includes("your daily values")) return true;
+
+  // DV table patterns
+  if (s.startsWith("calories :")) return true;
+  if (s.includes("less than")) return true;
+  if (s.includes("calories per gram")) return true;
+
+  return false;
+}
+
+function dropPercentCandidates<T extends ValueUnitCandidate>(arr: T[]): T[] {
+  // Remove all % candidates to ship without Daily Values
+  return arr.filter((c) => c.unit !== "%");
+}
+
+function extractLabelFromTokens(lineTokens: Token[], startIdx: number): string {
+  // Scan left from startIdx-1:
+  // - before we start collecting: skip numbers/units/punctuation
+  // - once collecting: collect word-like tokens; stop at first non-word boundary
+  const collected: string[] = [];
+  let collecting = false;
+
+  for (let i = startIdx - 1; i >= 0; i--) {
+    const t = normalizeTokenTextForExtraction(lineTokens[i].text);
+    const tNoSpace = t.replace(/\s+/g, "");
+
+    const isNum =
+      isNumberOnly(tNoSpace) ||
+      /^(\d+(?:\.\d+)?)(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)$/i.test(tNoSpace);
+    const isUnit = isUnitOnly(tNoSpace);
+    const word = isWordLike(t);
+
+    if (!collecting) {
+      if (word) {
+        collecting = true;
+        collected.push(t);
+      } else {
+        // skip until we hit words
+        continue;
+      }
+    } else {
+      if (word) {
+        collected.push(t);
+      } else {
+        // boundary hit (number/unit/punct/etc.) once collecting started
+        break;
+      }
+    }
+  }
+
+  return collected.reverse().join(" ").replace(/\s+/g, " ").trim();
+}
+
+function tokenCandidatesFromLine(
+  originalLineText: string,
+  lineIndex: number,
+  lineTokens: Token[]
+): ValueUnitCandidate[] {
+  // Skip DV noise entirely
+  if (isDailyValuesNoise(originalLineText)) return [];
+
+  const candidates: ValueUnitCandidate[] = [];
+
+  // Per-token extraction (lets us attach labels deterministically)
+  for (let i = 0; i < lineTokens.length; i++) {
+    const rawTok = lineTokens[i].text;
+    const tok = normalizeTokenTextForExtraction(rawTok);
+    const compact = tok.replace(/\s+/g, "");
+
+    // Combined: "300mg", "13g", "5%"
+    const mCombined = compact.match(
+      /^(\d+(?:\.\d+)?)(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)$/i
+    );
+    if (mCombined) {
+      const value = Number(mCombined[1]);
+      const unit = normalizeUnit(mCombined[2]);
+      if (Number.isFinite(value)) {
+        candidates.push({
+          raw: tok,
+          value,
+          unit,
+          line: originalLineText,
+          lineIndex,
+        });
+      }
+      continue;
+    }
+
+    // Split: "5" "%"  OR "300" "mg"
+    if (isNumberOnly(compact) && i + 1 < lineTokens.length) {
+      const nextTokRaw = lineTokens[i + 1].text;
+      const nextTok = normalizeTokenTextForExtraction(nextTokRaw);
+      const nextCompact = nextTok.replace(/\s+/g, "");
+
+      if (isUnitOnly(nextCompact)) {
+        const value = Number(compact);
+        const unit = normalizeUnit(nextCompact);
+        if (Number.isFinite(value)) {
+          candidates.push({
+            raw: `${tok} ${nextTok}`,
+            value,
+            unit,
+            line: originalLineText,
+            lineIndex,
+          });
+        }
+      }
+    }
+  }
+
+  // Calories heuristic (unitless) — only for "Calories 90 ..." lines, not table headers with ":"
+  // If we already extracted cal/kcal on this line, do nothing.
+  const normalizedLine = normalizeLineForExtraction(originalLineText);
+  const hasCalLike = candidates.some((c) => c.unit === "cal" || c.unit === "kcal");
+  if (!hasCalLike && /calories/i.test(normalizedLine) && !normalizedLine.includes(":")) {
+    // Find first number token after the word "Calories"
+    const idxCalories = lineTokens.findIndex((t) => /^calories$/i.test(t.text.trim()));
+    if (idxCalories >= 0) {
+      for (let j = idxCalories + 1; j < lineTokens.length; j++) {
+        const tt = normalizeTokenTextForExtraction(lineTokens[j].text).replace(/\s+/g, "");
+        if (isNumberOnly(tt)) {
+          const v = Number(tt);
+          if (Number.isFinite(v)) {
+            candidates.push({
+              raw: tt,
+              value: v,
+              unit: "",
+              line: originalLineText,
+              lineIndex,
+            });
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // Drop % candidates at the end (MVP policy)
+  return dropPercentCandidates(candidates);
+}
+
+/**
+ * Step 3 (existing): returns line strings + value/unit candidates (regex/tokens).
+ * Kept for compatibility with your runner.
+ */
 export function extractValueUnitCandidates(ocr: OcrResultLike): {
   lines: string[];
   candidates: ValueUnitCandidate[];
@@ -145,7 +337,7 @@ export function extractValueUnitCandidates(ocr: OcrResultLike): {
 
   const builtLines = buildLinesFromTokens(tokens);
 
-  const lines =
+  const rawLines =
     builtLines.length > 0
       ? builtLines.map((l) => l.text)
       : (ocr.fullText || "")
@@ -153,53 +345,123 @@ export function extractValueUnitCandidates(ocr: OcrResultLike): {
           .map((s) => s.trim())
           .filter(Boolean);
 
-  const re = /(\d+(?:\.\d+)?)\s*(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)/gi;
+  // Filter out DV noise lines from lines output (MVP policy)
+  const lines = rawLines.filter((l) => !isDailyValuesNoise(l));
 
+  // Use the token-based candidates when boxes exist; fallback to regex on fullText lines.
+  if (builtLines.length > 0) {
+    const candidates: ValueUnitCandidate[] = [];
+    builtLines.forEach((l, i) => {
+      if (isDailyValuesNoise(l.text)) return;
+      candidates.push(...tokenCandidatesFromLine(l.text, i, l.tokens));
+    });
+    return { lines, candidates };
+  }
+
+  const re = /(\d+(?:\.\d+)?)\s*(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)/gi;
   const candidates: ValueUnitCandidate[] = [];
 
-  lines.forEach((originalLine, lineIndex) => {
+  rawLines.forEach((originalLine, lineIndex) => {
+    if (isDailyValuesNoise(originalLine)) return;
+
     const line = normalizeLineForExtraction(originalLine);
 
-    // Track whether the line already contains cal/kcal extracted via regex
     let hasCalLike = false;
-
     re.lastIndex = 0;
+
     let m: RegExpExecArray | null;
     while ((m = re.exec(line)) !== null) {
       const raw = m[0];
       const value = Number(m[1]);
       const unit = normalizeUnit(m[2]);
-
       if (!Number.isFinite(value)) continue;
-
       if (unit === "cal" || unit === "kcal") hasCalLike = true;
 
-      candidates.push({
-        raw,
-        value,
-        unit,
-        line: originalLine,
-        lineIndex,
-      });
+      candidates.push({ raw, value, unit, line: originalLine, lineIndex });
     }
 
-    // Unitless calories: only add if we did NOT already extract cal/kcal on this line
     if (!hasCalLike && /calories/i.test(line) && !line.includes(":")) {
       const num = line.match(/(\d+(?:\.\d+)?)/)?.[1];
       if (num) {
         const v = Number(num);
         if (Number.isFinite(v)) {
-          candidates.push({
-            raw: num,
-            value: v,
-            unit: "",
-            line: originalLine,
-            lineIndex,
-          });
+          candidates.push({ raw: num, value: v, unit: "", line: originalLine, lineIndex });
         }
       }
     }
   });
 
-  return { lines, candidates };
+  return { lines, candidates: dropPercentCandidates(candidates) };
+}
+
+/**
+ * Step 4: Attach left-hand label phrase to each candidate (same line).
+ * Deterministic: derives label from tokens immediately to the left of the value.
+ */
+export function extractLabeledValueUnitCandidates(ocr: OcrResultLike): {
+  lines: string[];
+  candidates: LabeledValueUnitCandidate[];
+} {
+  const items = Array.isArray(ocr.items) ? ocr.items : [];
+  const tokens = items.map(tokenFromItem).filter(Boolean) as Token[];
+  const builtLines = buildLinesFromTokens(tokens);
+
+  const rawLines =
+    builtLines.length > 0
+      ? builtLines.map((l) => l.text)
+      : (ocr.fullText || "")
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+  // Filter out DV noise lines from lines output (MVP policy)
+  const lines = rawLines.filter((l) => !isDailyValuesNoise(l));
+
+  // If we have boxes, do Step 4 properly; otherwise fall back to Step 3 candidates with empty labels.
+  if (builtLines.length === 0) {
+    const step3 = extractValueUnitCandidates(ocr);
+    return {
+      lines: step3.lines,
+      candidates: step3.candidates.map((c) => ({ ...c, label: "" })),
+    };
+  }
+
+  const out: LabeledValueUnitCandidate[] = [];
+
+  builtLines.forEach((line, lineIndex) => {
+    if (isDailyValuesNoise(line.text)) return;
+
+    const cands = tokenCandidatesFromLine(line.text, lineIndex, line.tokens);
+
+    // Attach label per candidate by locating the token index where the value begins.
+    // Heuristic: find first token that contains the candidate's numeric prefix.
+    for (const c of cands) {
+      const valueStr = String(c.value);
+      let startIdx = -1;
+
+      for (let i = 0; i < line.tokens.length; i++) {
+        const tt = normalizeTokenTextForExtraction(line.tokens[i].text).replace(/\s+/g, "");
+        if (tt === valueStr || tt.startsWith(valueStr)) {
+          startIdx = i;
+          break;
+        }
+      }
+
+        let label = startIdx >= 0 ? extractLabelFromTokens(line.tokens, startIdx) : "";
+
+        if (
+            c.unit === "g" &&
+            /serving size/i.test(line.text) &&
+            /\(\s*.*\b\d+(?:\.\d+)?\s*g\b.*\s*\)/i.test(line.text)
+        ) {
+            label = "Serving Size";
+        }
+
+        out.push({ ...c, label });
+
+    }
+  });
+
+  // cands already had % removed, but keep this as a final safety net
+  return { lines, candidates: dropPercentCandidates(out) };
 }
