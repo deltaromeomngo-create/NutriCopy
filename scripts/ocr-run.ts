@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
 
-import { extractValueUnitCandidates } from "../lib/ocrPost";
+import { extractLabeledValueUnitCandidates, extractValueUnitCandidates } from "../lib/ocrPost";
 import { extractRawTextFromImage } from "../lib/ocrTest";
 
 
@@ -23,6 +23,12 @@ extractRawTextFromImage(imagePath)
     console.log("FULL TEXT:\n", out.fullText);
     console.log("\nITEM COUNT:", out.items.length);
     console.log("\nFIRST 10 ITEMS:\n", out.items.slice(0, 10));
+    
+    const labeled = extractLabeledValueUnitCandidates(out);
+
+    console.log("\nLABELED CANDIDATE COUNT:", labeled.candidates.length);
+    console.log("\nFIRST 30 LABELED CANDIDATES:\n", labeled.candidates.slice(0, 30));
+
   })
   .catch((e) => {
     console.error(e);
