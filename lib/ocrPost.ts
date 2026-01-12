@@ -28,6 +28,13 @@ export type ValueUnitCandidate = {
   lineIndex: number;
 };
 
+export type LabelRow = {
+  label: string;
+  primary: LabeledValueUnitCandidate;
+  alternates: LabeledValueUnitCandidate[];
+};
+
+
 export type LabeledValueUnitCandidate = ValueUnitCandidate & {
   label: string;     // e.g. "Sodium", "Total Fat", "Vitamin C"
 };
@@ -449,19 +456,153 @@ export function extractLabeledValueUnitCandidates(ocr: OcrResultLike): {
 
         let label = startIdx >= 0 ? extractLabelFromTokens(line.tokens, startIdx) : "";
 
+        // Patch: serving size gram weight inside parentheses often labels as "cup".
         if (
             c.unit === "g" &&
             /serving size/i.test(line.text) &&
             /\(\s*.*\b\d+(?:\.\d+)?\s*g\b.*\s*\)/i.test(line.text)
         ) {
+        label = "Serving Size";
+    }
+
+        // If this grams value is on a Serving Size line, force label.
+        // Handles "Serving Size approx 30g", "Serving Size ~30g", etc.
+        if (c.unit === "g" && /serving\s*size/i.test(line.text)) {
             label = "Serving Size";
         }
 
-        out.push({ ...c, label });
+    // Canonicalize common labels to consistent casing
+    if (/^serving\s*size$/i.test(label)) {
+        label = "Serving Size";
+    }
+
+    out.push({ ...c, label });
+
 
     }
   });
 
   // cands already had % removed, but keep this as a final safety net
   return { lines, candidates: dropPercentCandidates(out) };
+}
+
+/* -----------------------------
+   Step 5: group by label + pick primary
+   (no nutrient mapping; still input-assist only)
+------------------------------ */
+
+function normalizeLabelKey(label: string): string {
+  return label.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isNoiseLabel(label: string): boolean {
+  const k = normalizeLabelKey(label);
+
+  if (!k) return true;
+
+  // obvious headings / non-data lines
+  if (k === "nutrition facts") return true;
+  if (k === "amount per serving") return true;
+  if (k === "servings per container") return true;
+  if (k === "per container") return true;
+  if (k === "daily value") return true;
+
+  // OCR oddities
+  if (k === "(" || k === ")" || k === "*" || k === "-") return true;
+
+  return false;
+}
+
+function unitRank(labelKey: string, unit: string): number {
+  // Lower is better
+  // Calories: prefer unitless if present
+  if (labelKey === "calories") {
+    if (unit === "") return 0;
+    if (unit === "kcal") return 1;
+    if (unit === "cal") return 2;
+    return 9;
+  }
+
+  // Default preference: absolute units > unitless
+  if (unit === "mg") return 0;
+  if (unit === "g") return 1;
+  if (unit === "kJ" || unit === "kj") return 2;
+  if (unit === "kcal") return 3;
+  if (unit === "cal") return 4;
+  if (unit === "") return 8;
+  return 9;
+}
+
+function candidateScore(c: LabeledValueUnitCandidate): [number, number, number] {
+  // Lower tuple is better
+  const labelKey = normalizeLabelKey(c.label);
+  return [
+    c.lineIndex,                // earlier lines win (DV table is later)
+    unitRank(labelKey, c.unit), // prefer absolute units
+    Math.abs(c.value),          // stable tie-breaker
+  ];
+}
+
+/**
+ * Step 5 core: group by label and pick 1 primary candidate per label.
+ * Keeps alternates for debugging.
+ */
+export function groupByLabelPickPrimary(
+  labeledCandidates: LabeledValueUnitCandidate[]
+): LabelRow[] {
+  const filtered = labeledCandidates
+    .filter((c) => c.unit !== "%")                 // safety net
+    .filter((c) => c.label && c.label.trim())      // must have label
+    .filter((c) => !isNoiseLabel(c.label));        // drop junk labels
+
+  const map = new Map<string, { displayLabel: string; items: LabeledValueUnitCandidate[] }>();
+
+  for (const c of filtered) {
+    const key = normalizeLabelKey(c.label);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { displayLabel: c.label, items: [c] });
+    } else {
+      existing.items.push(c);
+    }
+  }
+
+  const rows: LabelRow[] = [];
+
+  for (const [, v] of map) {
+    const sorted = [...v.items].sort((a, b) => {
+      const sa = candidateScore(a);
+      const sb = candidateScore(b);
+      if (sa[0] !== sb[0]) return sa[0] - sb[0];
+      if (sa[1] !== sb[1]) return sa[1] - sb[1];
+      return sa[2] - sb[2];
+    });
+
+    rows.push({
+      label: v.displayLabel,
+      primary: sorted[0],
+      alternates: sorted.slice(1),
+    });
+  }
+
+  // deterministic ordering for printing / UI later
+  rows.sort((a, b) => {
+    if (a.primary.lineIndex !== b.primary.lineIndex) return a.primary.lineIndex - b.primary.lineIndex;
+    return a.label.localeCompare(b.label);
+  });
+
+  return rows;
+}
+
+/**
+ * Convenience: end-to-end Step 4 -> Step 5.
+ * Use this for UI later.
+ */
+export function extractLabelRows(ocr: OcrResultLike): {
+  lines: string[];
+  rows: LabelRow[];
+} {
+  const labeled = extractLabeledValueUnitCandidates(ocr);
+  const rows = groupByLabelPickPrimary(labeled.candidates);
+  return { lines: labeled.lines, rows };
 }
