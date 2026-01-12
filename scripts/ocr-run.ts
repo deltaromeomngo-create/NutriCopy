@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
 
-import { extractLabeledValueUnitCandidates, extractValueUnitCandidates } from "../lib/ocrPost";
+import { extractLabeledValueUnitCandidates, extractLabelRows, extractValueUnitCandidates } from "../lib/ocrPost";
 import { extractRawTextFromImage } from "../lib/ocrTest";
 
 
@@ -23,6 +23,16 @@ extractRawTextFromImage(imagePath)
     console.log("FULL TEXT:\n", out.fullText);
     console.log("\nITEM COUNT:", out.items.length);
     console.log("\nFIRST 10 ITEMS:\n", out.items.slice(0, 10));
+
+    const grouped = extractLabelRows(out);
+
+    console.log("\nROW COUNT:", grouped.rows.length);
+    console.log("\nROWS (primary):");
+    for (const r of grouped.rows) {
+        const p = r.primary;
+        console.log(`- ${r.label}: ${p.value}${p.unit ? p.unit : ""}`);
+    }
+
     
     const labeled = extractLabeledValueUnitCandidates(out);
 
