@@ -46,7 +46,11 @@ app-example
 
 .env
 .env.*
+!.env.example
 test-label*.jpg
 test-label*.jpeg
 test-label*.png
 test-label*.avif
+
+.vercel
+.env*.local
