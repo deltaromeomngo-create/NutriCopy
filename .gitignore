@@ -54,3 +54,4 @@ test-label*.avif
 
 .vercel
 .env*.local
+payload.json
