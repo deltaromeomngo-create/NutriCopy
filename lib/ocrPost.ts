@@ -1,7 +1,5 @@
 // lib/ocrPost.ts
-// Step 3/4: OCR post-processing (input-assist only).
-// Step 3: value+unit candidates
-// Step 4: attach left-hand label phrase per candidate
+// Step 3/4/5: OCR post-processing (input-assist only).
 // Scope: NO nutrient mapping, NO per-serve/per-100g logic, NO UI wiring.
 //
 // MVP POLICY: ship WITHOUT Daily Values.
@@ -21,22 +19,22 @@ type OcrResultLike = {
 };
 
 export type ValueUnitCandidate = {
-  raw: string;       // e.g. "300mg", "13 g", "5%"
-  value: number;     // e.g. 300
-  unit: string;      // "mg" | "g" | "kJ" | "kcal" | "%" | "" (unitless)
-  line: string;      // reconstructed line text (original)
+  raw: string; // e.g. "300mg", "13 g", "5%"
+  value: number;
+  unit: string; // "mg" | "g" | "kJ" | "kcal" | "%" | "" (unitless)
+  line: string;
   lineIndex: number;
+  tokenIndex?: number; // where the value begins in tokens (if token-based)
+};
+
+export type LabeledValueUnitCandidate = ValueUnitCandidate & {
+  label: string;
 };
 
 export type LabelRow = {
   label: string;
   primary: LabeledValueUnitCandidate;
   alternates: LabeledValueUnitCandidate[];
-};
-
-
-export type LabeledValueUnitCandidate = ValueUnitCandidate & {
-  label: string;     // e.g. "Sodium", "Total Fat", "Vitamin C"
 };
 
 type Token = {
@@ -47,6 +45,11 @@ type Token = {
   yMax: number;
   yMid: number;
   h: number;
+};
+
+export type ServingMeta = {
+  servingSize: { value: number; unit: "g" | "ml" | "" } | null;
+  servingsPerPack: number | null;
 };
 
 function finite(n: unknown, fallback = 0): number {
@@ -83,8 +86,8 @@ function median(nums: number[]): number {
 }
 
 type BuiltLine = {
-  text: string;      // joined token text
-  tokens: Token[];   // x-sorted tokens for label attachment
+  text: string;
+  tokens: Token[];
 };
 
 function buildLinesFromTokens(tokens: Token[]): BuiltLine[] {
@@ -93,9 +96,7 @@ function buildLinesFromTokens(tokens: Token[]): BuiltLine[] {
   const medH = median(tokens.map((t) => t.h).filter((h) => h > 0)) || 10;
   const yTol = Math.max(6, medH * 0.6);
 
-  const sorted = [...tokens].sort(
-    (a, b) => (a.yMid - b.yMid) || (a.xMin - b.xMin)
-  );
+  const sorted = [...tokens].sort((a, b) => (a.yMid - b.yMid) || (a.xMin - b.xMin));
 
   type LineAcc = { yRef: number; tokens: Token[] };
   const lines: LineAcc[] = [];
@@ -115,8 +116,7 @@ function buildLinesFromTokens(tokens: Token[]): BuiltLine[] {
     if (bestIdx !== -1 && bestDy <= yTol) {
       const line = lines[bestIdx];
       line.tokens.push(t);
-      line.yRef =
-        (line.yRef * (line.tokens.length - 1) + t.yMid) / line.tokens.length;
+      line.yRef = (line.yRef * (line.tokens.length - 1) + t.yMid) / line.tokens.length;
     } else {
       lines.push({ yRef: t.yMid, tokens: [t] });
     }
@@ -155,9 +155,7 @@ function normalizeLineForExtraction(line: string): string {
 
 function normalizeTokenTextForExtraction(tokenText: string): string {
   let s = tokenText.trim();
-  // Remove thousands separators inside tokens
   s = s.replace(/(\d),(?=\d{3}\b)/g, "$1");
-  // Omg -> 0mg
   s = s.replace(/\bO\s*mg\b/gi, "0mg");
   return s;
 }
@@ -167,19 +165,30 @@ function isNumberOnly(s: string): boolean {
 }
 
 function isUnitOnly(s: string): boolean {
-  // Keep % here as a boundary token for label extraction,
-  // even though we will DROP % candidates from output.
-  return /^(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)$/i.test(s.trim());
+  // Keep % as a boundary token for parsing, but we DROP % candidates later.
+  return /^(mg|g|kg|mcg|µg|ug|kj|kcal|cal|ml|%)$/i.test(s.trim());
 }
 
-function isWordLike(s: string): boolean {
-  // allow letters and common connectors
-  return /[A-Za-z]/.test(s) && !isUnitOnly(s);
+function tokenHasDigits(s: string): boolean {
+  return /\d/.test(s);
+}
+
+function isConnectorToken(s: string): boolean {
+  const t = s.trim();
+  return t === "," || t === "-" || t === "–" || t === "—" || t === ":" || t === "/" || t === ".";
+}
+
+function isWordLikeToken(s: string): boolean {
+  // "Fat," "Carbohydrate" "-sugars" etc.
+  const t = s.trim();
+  if (!t) return false;
+  if (isUnitOnly(t)) return false;
+  if (tokenHasDigits(t)) return false;
+  return /[A-Za-z]/.test(t);
 }
 
 /**
- * Daily Values boilerplate/table lines are high-noise and not shipped in MVP.
- * This also kills the "Sad Fat / Less than ..." DV table artifacts.
+ * DV boilerplate/table lines are high-noise and not shipped in MVP.
  */
 function isDailyValuesNoise(originalLineText: string): boolean {
   const s = normalizeLineForExtraction(originalLineText).toLowerCase();
@@ -194,75 +203,116 @@ function isDailyValuesNoise(originalLineText: string): boolean {
 
   // DV table patterns
   if (s.startsWith("calories :")) return true;
-  if (s.includes("less than")) return true;
+  
   if (s.includes("calories per gram")) return true;
 
   return false;
 }
 
+/**
+ * Column/header lines that often create junk rows.
+ */
+function isHeaderNoise(originalLineText: string): boolean {
+  const s = normalizeLineForExtraction(originalLineText).toLowerCase();
+
+  // Common AU header
+  if (s.includes("avg.") && s.includes("quantity")) return true;
+  if (s.includes("avg") && s.includes("quantity")) return true;
+
+  if (s.includes("per 100")) return true;
+  if (s.includes("per serving per")) return true;
+
+  // Generic header-ish
+  if (s.trim() === "nutrition information") return true;
+  if (s.trim() === "nutrition facts") return true;
+
+  return false;
+}
+
 function dropPercentCandidates<T extends ValueUnitCandidate>(arr: T[]): T[] {
-  // Remove all % candidates to ship without Daily Values
-  return arr.filter((c) => c.unit !== "%");
+  return arr.filter((c) => c.unit !== "%" && !c.raw.includes("%"));
+}
+
+/**
+ * Clean label: remove trailing punctuation/connectors, and prevent digits/unit fragments
+ */
+function cleanLabel(label: string): string {
+  let s = label.replace(/\s+/g, " ").trim();
+
+  // Strip common OCR prefixes / line-number artifacts: "USE Protein", "BY -saturated", "19 Dietary fibre"
+  s = s.replace(/^(use|by)\s+/i, "");
+  s = s.replace(/^\d+\s+/, "");
+  s = s.replace(/^[:\-–—]+\s*/, "");
+
+  // Trim trailing connectors/punct
+  s = s.replace(/[\s,:.\-–—/]+$/g, "").trim();
+
+  // Hard rule: no digits in labels
+  if (/\d/.test(s)) return "";
+
+  // Normalize common casing
+  if (/^serving\s*size$/i.test(s)) return "Serving Size";
+  if (/^servings\s*per\s*(package|pack|container)$/i.test(s)) return "Servings per package";
+
+  return s;
 }
 
 function extractLabelFromTokens(lineTokens: Token[], startIdx: number): string {
-  // Scan left from startIdx-1:
-  // - before we start collecting: skip numbers/units/punctuation
-  // - once collecting: collect word-like tokens; stop at first non-word boundary
+  // Walk left, collecting a phrase of [word | connector] tokens,
+  // stopping once we hit number/unit territory after collection begins.
   const collected: string[] = [];
-  let collecting = false;
+  let started = false;
 
   for (let i = startIdx - 1; i >= 0; i--) {
-    const t = normalizeTokenTextForExtraction(lineTokens[i].text);
-    const tNoSpace = t.replace(/\s+/g, "");
+    const raw = normalizeTokenTextForExtraction(lineTokens[i].text);
+    const t = raw.trim();
+    const compact = t.replace(/\s+/g, "");
 
-    const isNum =
-      isNumberOnly(tNoSpace) ||
-      /^(\d+(?:\.\d+)?)(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)$/i.test(tNoSpace);
-    const isUnit = isUnitOnly(tNoSpace);
-    const word = isWordLike(t);
+    const isNumOrValueUnit =
+      isNumberOnly(compact) ||
+      /^(\d+(?:\.\d+)?)(mg|g|kg|mcg|µg|ug|kj|kcal|cal|ml|%)$/i.test(compact) ||
+      isUnitOnly(compact);
 
-    if (!collecting) {
-      if (word) {
-        collecting = true;
+    const isWord = isWordLikeToken(t);
+    const isConn = isConnectorToken(t);
+
+    if (!started) {
+      if (isWord) {
+        started = true;
         collected.push(t);
-      } else {
-        // skip until we hit words
         continue;
       }
+      // keep skipping until we hit the first word
+      continue;
+    }
+
+    // started
+    if (isNumOrValueUnit) break;
+
+    if (isWord || isConn) {
+      collected.push(t);
     } else {
-      if (word) {
-        collected.push(t);
-      } else {
-        // boundary hit (number/unit/punct/etc.) once collecting started
-        break;
-      }
+      break;
     }
   }
 
-  return collected.reverse().join(" ").replace(/\s+/g, " ").trim();
+  const label = collected.reverse().join(" ").replace(/\s+/g, " ").trim();
+  return cleanLabel(label);
 }
 
-function tokenCandidatesFromLine(
-  originalLineText: string,
-  lineIndex: number,
-  lineTokens: Token[]
-): ValueUnitCandidate[] {
-  // Skip DV noise entirely
+function tokenCandidatesFromLine(originalLineText: string, lineIndex: number, lineTokens: Token[]): ValueUnitCandidate[] {
   if (isDailyValuesNoise(originalLineText)) return [];
+  if (isHeaderNoise(originalLineText)) return [];
 
   const candidates: ValueUnitCandidate[] = [];
 
-  // Per-token extraction (lets us attach labels deterministically)
   for (let i = 0; i < lineTokens.length; i++) {
     const rawTok = lineTokens[i].text;
     const tok = normalizeTokenTextForExtraction(rawTok);
     const compact = tok.replace(/\s+/g, "");
 
     // Combined: "300mg", "13g", "5%"
-    const mCombined = compact.match(
-      /^(\d+(?:\.\d+)?)(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)$/i
-    );
+    const mCombined = compact.match(/^(\d+(?:\.\d+)?)(mg|g|kg|mcg|µg|ug|kj|kcal|cal|ml|%)$/i);
     if (mCombined) {
       const value = Number(mCombined[1]);
       const unit = normalizeUnit(mCombined[2]);
@@ -273,12 +323,13 @@ function tokenCandidatesFromLine(
           unit,
           line: originalLineText,
           lineIndex,
+          tokenIndex: i,
         });
       }
       continue;
     }
 
-    // Split: "5" "%"  OR "300" "mg"
+    // Split: "300" "mg"
     if (isNumberOnly(compact) && i + 1 < lineTokens.length) {
       const nextTokRaw = lineTokens[i + 1].text;
       const nextTok = normalizeTokenTextForExtraction(nextTokRaw);
@@ -294,18 +345,17 @@ function tokenCandidatesFromLine(
             unit,
             line: originalLineText,
             lineIndex,
+            tokenIndex: i,
           });
         }
       }
     }
   }
 
-  // Calories heuristic (unitless) — only for "Calories 90 ..." lines, not table headers with ":"
-  // If we already extracted cal/kcal on this line, do nothing.
+  // Calories heuristic (unitless) — only for "Calories 90 ..." lines, not headers with ":"
   const normalizedLine = normalizeLineForExtraction(originalLineText);
   const hasCalLike = candidates.some((c) => c.unit === "cal" || c.unit === "kcal");
   if (!hasCalLike && /calories/i.test(normalizedLine) && !normalizedLine.includes(":")) {
-    // Find first number token after the word "Calories"
     const idxCalories = lineTokens.findIndex((t) => /^calories$/i.test(t.text.trim()));
     if (idxCalories >= 0) {
       for (let j = idxCalories + 1; j < lineTokens.length; j++) {
@@ -319,6 +369,7 @@ function tokenCandidatesFromLine(
               unit: "",
               line: originalLineText,
               lineIndex,
+              tokenIndex: j,
             });
           }
           break;
@@ -327,13 +378,11 @@ function tokenCandidatesFromLine(
     }
   }
 
-  // Drop % candidates at the end (MVP policy)
   return dropPercentCandidates(candidates);
 }
 
 /**
- * Step 3 (existing): returns line strings + value/unit candidates (regex/tokens).
- * Kept for compatibility with your runner.
+ * Step 3: returns line strings + value/unit candidates.
  */
 export function extractValueUnitCandidates(ocr: OcrResultLike): {
   lines: string[];
@@ -352,10 +401,8 @@ export function extractValueUnitCandidates(ocr: OcrResultLike): {
           .map((s) => s.trim())
           .filter(Boolean);
 
-  // Filter out DV noise lines from lines output (MVP policy)
   const lines = rawLines.filter((l) => !isDailyValuesNoise(l));
 
-  // Use the token-based candidates when boxes exist; fallback to regex on fullText lines.
   if (builtLines.length > 0) {
     const candidates: ValueUnitCandidate[] = [];
     builtLines.forEach((l, i) => {
@@ -365,11 +412,13 @@ export function extractValueUnitCandidates(ocr: OcrResultLike): {
     return { lines, candidates };
   }
 
-  const re = /(\d+(?:\.\d+)?)\s*(mg|g|kg|mcg|µg|ug|kj|kcal|cal|%)/gi;
+  // Fallback path (no boxes): regex
+  const re = /(\d+(?:\.\d+)?)\s*(mg|g|kg|mcg|µg|ug|kj|kcal|cal|ml|%)/gi;
   const candidates: ValueUnitCandidate[] = [];
 
   rawLines.forEach((originalLine, lineIndex) => {
     if (isDailyValuesNoise(originalLine)) return;
+    if (isHeaderNoise(originalLine)) return;
 
     const line = normalizeLineForExtraction(originalLine);
 
@@ -388,7 +437,9 @@ export function extractValueUnitCandidates(ocr: OcrResultLike): {
     }
 
     if (!hasCalLike && /calories/i.test(line) && !line.includes(":")) {
-      const num = line.match(/(\d+(?:\.\d+)?)/)?.[1];
+      const idx = line.toLowerCase().indexOf("calories");
+      const after = idx >= 0 ? line.slice(idx + "calories".length) : line;
+      const num = after.match(/(\d+(?:\.\d+)?)/)?.[1];
       if (num) {
         const v = Number(num);
         if (Number.isFinite(v)) {
@@ -403,7 +454,6 @@ export function extractValueUnitCandidates(ocr: OcrResultLike): {
 
 /**
  * Step 4: Attach left-hand label phrase to each candidate (same line).
- * Deterministic: derives label from tokens immediately to the left of the value.
  */
 export function extractLabeledValueUnitCandidates(ocr: OcrResultLike): {
   lines: string[];
@@ -421,10 +471,8 @@ export function extractLabeledValueUnitCandidates(ocr: OcrResultLike): {
           .map((s) => s.trim())
           .filter(Boolean);
 
-  // Filter out DV noise lines from lines output (MVP policy)
   const lines = rawLines.filter((l) => !isDailyValuesNoise(l));
 
-  // If we have boxes, do Step 4 properly; otherwise fall back to Step 3 candidates with empty labels.
   if (builtLines.length === 0) {
     const step3 = extractValueUnitCandidates(ocr);
     return {
@@ -437,58 +485,65 @@ export function extractLabeledValueUnitCandidates(ocr: OcrResultLike): {
 
   builtLines.forEach((line, lineIndex) => {
     if (isDailyValuesNoise(line.text)) return;
+    if (isHeaderNoise(line.text)) return;
 
     const cands = tokenCandidatesFromLine(line.text, lineIndex, line.tokens);
 
-    // Attach label per candidate by locating the token index where the value begins.
-    // Heuristic: find first token that contains the candidate's numeric prefix.
     for (const c of cands) {
-      const valueStr = String(c.value);
-      let startIdx = -1;
+      const startIdx = typeof c.tokenIndex === "number" ? c.tokenIndex : -1;
 
-      for (let i = 0; i < line.tokens.length; i++) {
-        const tt = normalizeTokenTextForExtraction(line.tokens[i].text).replace(/\s+/g, "");
-        if (tt === valueStr || tt.startsWith(valueStr)) {
-          startIdx = i;
-          break;
-        }
+      let label = startIdx >= 0 ? extractLabelFromTokens(line.tokens, startIdx) : "";
+
+      // Force Serving Size label if grams appear on a serving size line
+      if (c.unit === "g" && /serving\s*size/i.test(line.text)) {
+        label = "Serving Size";
       }
 
-        let label = startIdx >= 0 ? extractLabelFromTokens(line.tokens, startIdx) : "";
-
-        // Patch: serving size gram weight inside parentheses often labels as "cup".
-        if (
-            c.unit === "g" &&
-            /serving size/i.test(line.text) &&
-            /\(\s*.*\b\d+(?:\.\d+)?\s*g\b.*\s*\)/i.test(line.text)
-        ) {
-        label = "Serving Size";
-    }
-
-        // If this grams value is on a Serving Size line, force label.
-        // Handles "Serving Size approx 30g", "Serving Size ~30g", etc.
-        if (c.unit === "g" && /serving\s*size/i.test(line.text)) {
-            label = "Serving Size";
-        }
-
-    // Canonicalize common labels to consistent casing
-    if (/^serving\s*size$/i.test(label)) {
-        label = "Serving Size";
-    }
-
-    out.push({ ...c, label });
-
-
+      // If label is empty after cleaning, keep it empty (Step 5 will drop it)
+      out.push({ ...c, label });
     }
   });
 
-  // cands already had % removed, but keep this as a final safety net
   return { lines, candidates: dropPercentCandidates(out) };
 }
 
 /* -----------------------------
+   Serving meta extraction (string-based)
+------------------------------ */
+
+export function extractServingMeta(lines: string[]): ServingMeta {
+  let servingSize: ServingMeta["servingSize"] = null;
+  let servingsPerPack: number | null = null;
+
+  for (const rawLine of lines) {
+    const line = normalizeLineForExtraction(rawLine);
+    const s = line.toLowerCase();
+
+    // Serving size: capture g/ml (prefer g)
+    if (!servingSize && s.includes("serving") && s.includes("size")) {
+      const m = line.match(/serving\s*size[^0-9]*?(\d+(?:\.\d+)?)\s*(g|ml)\b/i);
+      if (m) {
+        const v = Number(m[1]);
+        const u = (m[2] || "").toLowerCase() as "g" | "ml";
+        if (Number.isFinite(v)) servingSize = { value: v, unit: u };
+      }
+    }
+
+    // Servings per package/container: capture first numeric
+    if (servingsPerPack == null && s.includes("servings") && s.includes("per")) {
+      const m = line.match(/servings\s*per[^0-9]*?(\d+(?:\.\d+)?)/i);
+      if (m) {
+        const v = Number(m[1]);
+        if (Number.isFinite(v)) servingsPerPack = v;
+      }
+    }
+  }
+
+  return { servingSize, servingsPerPack };
+}
+
+/* -----------------------------
    Step 5: group by label + pick primary
-   (no nutrient mapping; still input-assist only)
 ------------------------------ */
 
 function normalizeLabelKey(label: string): string {
@@ -497,25 +552,29 @@ function normalizeLabelKey(label: string): string {
 
 function isNoiseLabel(label: string): boolean {
   const k = normalizeLabelKey(label);
-
   if (!k) return true;
 
-  // obvious headings / non-data lines
+  // headings / non-data
   if (k === "nutrition facts") return true;
+  if (k === "nutrition information") return true;
   if (k === "amount per serving") return true;
   if (k === "servings per container") return true;
-  if (k === "per container") return true;
-  if (k === "daily value") return true;
+  if (k === "servings per package") return true;
+  if (k.includes("less than")) return true;
 
-  // OCR oddities
-  if (k === "(" || k === ")" || k === "*" || k === "-") return true;
+  // header-ish
+  if (k.includes("per 100")) return true;
+  if (k.includes("per serving")) return true;
+  if (k.includes("avg. quantity")) return true;
+  if (k.includes("avg quantity")) return true;
+
+  // digits in labels are always junk for grouping
+  if (/\d/.test(k)) return true;
 
   return false;
 }
 
 function unitRank(labelKey: string, unit: string): number {
-  // Lower is better
-  // Calories: prefer unitless if present
   if (labelKey === "calories") {
     if (unit === "") return 0;
     if (unit === "kcal") return 1;
@@ -523,48 +582,34 @@ function unitRank(labelKey: string, unit: string): number {
     return 9;
   }
 
-  // Default preference: absolute units > unitless
   if (unit === "mg") return 0;
   if (unit === "g") return 1;
   if (unit === "kJ" || unit === "kj") return 2;
   if (unit === "kcal") return 3;
   if (unit === "cal") return 4;
+  if (unit === "ml") return 5;
   if (unit === "") return 8;
   return 9;
 }
 
 function candidateScore(c: LabeledValueUnitCandidate): [number, number, number] {
-  // Lower tuple is better
   const labelKey = normalizeLabelKey(c.label);
-  return [
-    c.lineIndex,                // earlier lines win (DV table is later)
-    unitRank(labelKey, c.unit), // prefer absolute units
-    Math.abs(c.value),          // stable tie-breaker
-  ];
+  return [c.lineIndex, unitRank(labelKey, c.unit), Math.abs(c.value)];
 }
 
-/**
- * Step 5 core: group by label and pick 1 primary candidate per label.
- * Keeps alternates for debugging.
- */
-export function groupByLabelPickPrimary(
-  labeledCandidates: LabeledValueUnitCandidate[]
-): LabelRow[] {
+export function groupByLabelPickPrimary(labeledCandidates: LabeledValueUnitCandidate[]): LabelRow[] {
   const filtered = labeledCandidates
-    .filter((c) => c.unit !== "%")                 // safety net
-    .filter((c) => c.label && c.label.trim())      // must have label
-    .filter((c) => !isNoiseLabel(c.label));        // drop junk labels
+    .filter((c) => c.unit !== "%")
+    .filter((c) => c.label && c.label.trim())
+    .filter((c) => !isNoiseLabel(c.label));
 
   const map = new Map<string, { displayLabel: string; items: LabeledValueUnitCandidate[] }>();
 
   for (const c of filtered) {
     const key = normalizeLabelKey(c.label);
     const existing = map.get(key);
-    if (!existing) {
-      map.set(key, { displayLabel: c.label, items: [c] });
-    } else {
-      existing.items.push(c);
-    }
+    if (!existing) map.set(key, { displayLabel: c.label, items: [c] });
+    else existing.items.push(c);
   }
 
   const rows: LabelRow[] = [];
@@ -585,7 +630,6 @@ export function groupByLabelPickPrimary(
     });
   }
 
-  // deterministic ordering for printing / UI later
   rows.sort((a, b) => {
     if (a.primary.lineIndex !== b.primary.lineIndex) return a.primary.lineIndex - b.primary.lineIndex;
     return a.label.localeCompare(b.label);
@@ -594,10 +638,6 @@ export function groupByLabelPickPrimary(
   return rows;
 }
 
-/**
- * Convenience: end-to-end Step 4 -> Step 5.
- * Use this for UI later.
- */
 export function extractLabelRows(ocr: OcrResultLike): {
   lines: string[];
   rows: LabelRow[];
