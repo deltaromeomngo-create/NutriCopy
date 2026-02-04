@@ -1,9 +1,11 @@
 // api/ocr.js
-// Vercel Serverless Function (Node) — OCR thin spike endpoint
-// CommonJS module export (works without "type": "module")
+// Vercel Serverless Function — OCR thin spike
+// CommonJS ONLY
+
+const { ocrPost } = require("../lib/ocrPost.server.cjs");
+const { isSubscribedForRequest } = require("../lib/entitlement.server.cjs");
 
 async function readJsonBody(req) {
-  // Vercel dev can set req.body OR not; we handle both.
   if (req.body && typeof req.body === "object") return req.body;
 
   if (typeof req.body === "string") {
@@ -14,15 +16,8 @@ async function readJsonBody(req) {
     }
   }
 
-  // Raw stream read
-  const chunks = [];
-  await new Promise((resolve, reject) => {
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", resolve);
-    req.on("error", reject);
-  });
-
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  let raw = "";
+  for await (const chunk of req) raw += chunk;
   if (!raw) return null;
 
   try {
@@ -32,62 +27,93 @@ async function readJsonBody(req) {
   }
 }
 
-async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
-    // CORS for browser/expo-web testing
+    // --- CORS (preflight-safe) ---
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    const acrh = req.headers["access-control-request-headers"];
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      typeof acrh === "string" && acrh.length ? acrh : "Content-Type"
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
 
     if (req.method === "OPTIONS") return res.status(204).end();
 
+    // --- Health check ---
     if (req.method === "GET") {
-      return res.status(405).json({
-        error: "Method Not Allowed",
-        hint: "POST JSON: { imageBase64: '...base64...' }",
-      });
+      return res.status(200).json({ ok: true, message: "Function alive" });
     }
 
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method Not Allowed" });
     }
 
-    const key = process.env.OCR_key;
-    if (!key) {
-      return res.status(500).json({
-        error: "Missing OCR_key env var",
-        hint: "Set OCR_key in Vercel + pull envs for local dev",
-      });
+    // 🔒 SUBSCRIPTION GATE
+    const DEV =
+      process.env.NODE_ENV !== "production" ||
+      process.env.VERCEL_ENV === "development";
+
+    // DEV BYPASS (local only)
+    if (!DEV) {
+      const subscribed = await isSubscribedForRequest(req, res);
+      if (!subscribed) {
+        return res.status(403).json({
+          error: "NOT_SUBSCRIBED",
+          message: "Subscription required to scan labels",
+        });
+      }
     }
+
 
     const body = await readJsonBody(req);
     if (!body) return res.status(400).json({ error: "Invalid JSON" });
 
+    // --- STUB MODE ---
+    if (body.useStub === true) {
+      const r0 = {
+        fullTextAnnotation: {
+          text: [
+            "Nutrition Facts",
+            "Serving Size 1 cup (114g)",
+            "Calories 90",
+            "Protein 3g",
+            "Total Fat 3g",
+            "Sodium 300mg",
+            "Total Carbohydrate 13g",
+          ].join("\n"),
+        },
+        textAnnotations: [{ description: "Nutrition Facts" }],
+      };
+
+      const debug = body?.debug === true;
+      return res.status(200).json(ocrPost(r0, { debug }));
+
+    }
+
+    // --- REAL MODE ---
+    const key = process.env.OCR_key;
+    if (!key) {
+      return res.status(500).json({
+        error: "Missing OCR_key env var",
+      });
+    }
+
     let imageBase64 = body.imageBase64;
     if (typeof imageBase64 !== "string") {
-      return res.status(400).json({
-        error: "Missing imageBase64",
-        expected: "{ imageBase64: '...base64...' }",
-      });
+      return res.status(400).json({ error: "Missing imageBase64" });
     }
 
-    // allow data URLs
-    imageBase64 = imageBase64.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
+    imageBase64 = imageBase64.replace(
+      /^data:image\/[a-zA-Z0-9.+-]+;base64,/,
+      ""
+    );
 
     if (!imageBase64 || imageBase64.length < 100) {
-      return res.status(400).json({
-        error: "imageBase64 too small/empty",
-        hint: "Base64 must be the bytes of the image, not a filename.",
-      });
+      return res.status(400).json({ error: "imageBase64 too small" });
     }
-
-    if (imageBase64.length > 8_000_000) {
-      return res.status(413).json({
-        error: "Payload too large",
-        hint: "Send a smaller/compressed image.",
-      });
-    }
-
 
     const payload = {
       requests: [
@@ -108,38 +134,29 @@ async function handler(req, res) {
     );
 
     const raw = await visionRes.text();
-
     if (!visionRes.ok) {
       return res.status(visionRes.status).json({
-        error: "Vision API error",
-        status: visionRes.status,
-        body: raw,
+        error: "VISION_ERROR",
       });
     }
 
     const json = JSON.parse(raw);
-    const r0 = json?.responses?.[0] || {};
+    const r0 = json?.responses?.[0];
+    if (!r0) {
+      return res.status(500).json({ error: "Bad Vision response" });
+    }
 
-    const fullText =
-      r0?.fullTextAnnotation?.text ||
-      r0?.textAnnotations?.[0]?.description ||
-      "";
+    const debug = body?.debug === true;
+    return res.status(200).json(ocrPost(r0, { debug }));
 
-    const items = (r0?.textAnnotations || [])
-      .slice(1)
-      .map((a) => ({
-        text: a.description,
-        boundingBox: a.boundingPoly?.vertices || [],
-      }));
-
-    return res.status(200).json({ fullText, items });
   } catch (err) {
-    // Always respond; prevents NO_RESPONSE_FROM_FUNCTION
-    return res.status(500).json({
-      error: "Server error",
-      message: (err && err.message) ? err.message : String(err),
-    });
-  }
+  console.error("OCR SERVER ERROR:", err);
+  return res.status(500).json({
+    error: "SERVER_ERROR",
+    message: String(err?.message || err),
+    stack: err?.stack,
+  });
 }
 
-module.exports = handler;
+
+};

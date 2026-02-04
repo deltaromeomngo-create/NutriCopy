@@ -64,3 +64,6 @@ fixtures/payload.json
 
 # allow example fixture
 !fixtures/payload.example.json
+
+.env*.local
+.vercel

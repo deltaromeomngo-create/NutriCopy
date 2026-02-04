@@ -2,20 +2,20 @@
 import { router } from "expo-router";
 import { useMemo, useState } from "react";
 import {
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    View,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
-import { setCurrentLabel } from "../lib/labelStore";
+import HoverPressable from "../components/HoverPressable";
+import { getCurrentLabel, setCurrentLabel } from "../lib/labelStore";
 import type { Confidence, LabelData, NutrientKey } from "../lib/mockLabel";
 
 type Unit = "g" | "ml";
 
 const NUTRIENTS: Array<{ key: NutrientKey; label: string; unit: string }> = [
-  { key: "energy_kj", label: "Energy (kJ)", unit: "kJ" },
-  { key: "energy_kcal", label: "Energy (kcal)", unit: "kcal" },
+  { key: "energy_kj", label: "Energy", unit: "kJ" },
+  { key: "energy_kcal", label: "Energy", unit: "kcal" },
   { key: "protein_g", label: "Protein", unit: "g" },
   { key: "carbs_g", label: "Carbohydrate", unit: "g" },
   { key: "fat_g", label: "Fat", unit: "g" },
@@ -32,18 +32,35 @@ function toNumberOrNull(s: string) {
 }
 
 export default function Input() {
-  const [servingValue, setServingValue] = useState<string>("60");
-  const [servingUnit, setServingUnit] = useState<Unit>("g");
+  const existing = getCurrentLabel();
 
-  const [values, setValues] = useState<Record<NutrientKey, string>>({
-    energy_kj: "750",
-    energy_kcal: "180",
-    protein_g: "12",
-    carbs_g: "20",
-    fat_g: "6",
-    sugars_g: "8",
-    fibre_g: "4",
-    sodium_mg: "220",
+  const [servingValue, setServingValue] = useState<string>(
+    existing ? String(existing.servingSize.value) : ""
+  );
+  const [servingUnit, setServingUnit] = useState<Unit>(
+    existing?.servingSize.unit ?? "g"
+  );
+
+  const [values, setValues] = useState<Record<NutrientKey, string>>(() => {
+    const empty: Record<NutrientKey, string> = {
+      energy_kj: "",
+      energy_kcal: "",
+      protein_g: "",
+      carbs_g: "",
+      fat_g: "",
+      sugars_g: "",
+      fibre_g: "",
+      sodium_mg: "",
+    };
+
+    if (!existing) return empty;
+
+    for (const key in existing.nutrients) {
+      const k = key as NutrientKey;
+      empty[k] = String(existing.nutrients[k]?.value ?? "");
+    }
+
+    return empty;
   });
 
   const defaultConfidence: Confidence = "High";
@@ -80,17 +97,27 @@ export default function Input() {
   }
 
   function saveAndNavigate(path: "/" | "/review" | "/export") {
-    if (path === "/") {
-      router.push(path);
-      return;
-    }
-
-    const label = buildLabel();
-    if (!label) return;
-
-    setCurrentLabel(label);
+  if (path === "/") {
     router.push(path);
+    return;
   }
+
+  const label = buildLabel();
+  if (!label) return;
+
+  // Preserve existing user-provided label name (entered on Review screen)
+  const existing = getCurrentLabel();
+  const name =
+    typeof (existing as any)?.name === "string" ? (existing as any).name : undefined;
+
+  setCurrentLabel({
+    ...label,
+    ...(name ? { name } : {}),
+  });
+
+  router.push(path);
+}
+
 
   return (
     <View style={{ flex: 1 }}>
@@ -101,7 +128,6 @@ export default function Input() {
           alignItems: "center",
         }}
       >
-        {/* Constrain width for desktop, still fine on mobile */}
         <View style={{ width: "100%", maxWidth: 520, gap: 12 }}>
           <Text style={{ fontSize: 24 }}>Manual Input</Text>
 
@@ -125,7 +151,7 @@ export default function Input() {
                   flex: 1,
                 }}
               />
-              <Pressable
+              <HoverPressable
                 onPress={() => setServingUnit(servingUnit === "g" ? "ml" : "g")}
                 style={{
                   borderWidth: 1,
@@ -137,7 +163,7 @@ export default function Input() {
                 }}
               >
                 <Text>{servingUnit}</Text>
-              </Pressable>
+              </HoverPressable>
             </View>
 
             {!canProceed && (
@@ -171,7 +197,7 @@ export default function Input() {
 
           {/* Actions */}
           <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-            <Pressable
+            <HoverPressable
               disabled={!canProceed}
               onPress={() => saveAndNavigate("/review")}
               style={{
@@ -184,9 +210,9 @@ export default function Input() {
               }}
             >
               <Text>Review</Text>
-            </Pressable>
+            </HoverPressable>
 
-            <Pressable
+            <HoverPressable
               disabled={!canProceed}
               onPress={() => saveAndNavigate("/export")}
               style={{
@@ -199,9 +225,9 @@ export default function Input() {
               }}
             >
               <Text>Export</Text>
-            </Pressable>
+            </HoverPressable>
 
-            <Pressable
+            <HoverPressable
               onPress={() => saveAndNavigate("/")}
               style={{
                 padding: 12,
@@ -212,7 +238,7 @@ export default function Input() {
               }}
             >
               <Text>Back to Scan</Text>
-            </Pressable>
+            </HoverPressable>
           </View>
         </View>
       </ScrollView>

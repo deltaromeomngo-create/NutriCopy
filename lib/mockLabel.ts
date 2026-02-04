@@ -13,7 +13,12 @@ export type Confidence = "High" | "Med" | "Low";
 export type LabelData = {
   basis: "per_serve" | "per_100g";
   servingSize: { value: number; unit: "g" | "ml" };
+  name?: string; // user-provided label / product name
   nutrients: Partial<Record<NutrientKey, { value: number; unit: string; confidence: Confidence }>>;
+  consumption?: {
+  customServes?: number;
+  customGrams?: number;
+};
 };
 
 export const mockLabel: LabelData = {

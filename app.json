@@ -41,8 +41,11 @@
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
+      "typedRoutes": false,
       "reactCompiler": true
+    },
+    "typescript": {
+      "tsconfigPath": "./tsconfig.expo.json"
     }
   }
 }

@@ -1,7 +1,7 @@
 // lib/nutritionFormat.ts
 import type { Confidence, LabelData, NutrientKey } from "./mockLabel";
 
-export type Basis = "per_serve" | "per_100g";
+export type Basis = "per_serve" | "per_100g" | "custom";
 
 type Row = {
   id: string;
@@ -59,30 +59,58 @@ export function servingSizeLine(label: LabelData, basis: Basis) {
   return `Serving size: ${serving}`;
 }
 
-export function getReviewRows(label: LabelData, basis: Basis): Row[] {
+export function getReviewRows(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number
+): Row[] {
   const nutrients = label.nutrients;
 
-  // Combine Energy into ONE row: "XXXX kJ (YYY kcal)"
-  const kj = nutrients.energy_kj;
-  const kcal = nutrients.energy_kcal;
+  const canUseCustomServes =
+    basis === "custom" &&
+    Number.isFinite(customServes) &&
+    customServes! > 0 &&
+    label.servingSize.value >= 5 &&
+    (label.servingSize.unit === "g" || label.servingSize.unit === "ml");
 
   const rows: Row[] = [];
+
+  /* ---------------- Energy ---------------- */
+
+  const kj = nutrients.energy_kj;
+  const kcal = nutrients.energy_kcal;
 
   if (kj || kcal) {
     const servingSize = label.servingSize.value;
 
-    const kjValue =
-      kj && basis === "per_100g" ? toPer100(kj.value, servingSize) : kj?.value;
-    const kcalValue =
-      kcal && basis === "per_100g" ? toPer100(kcal.value, servingSize) : kcal?.value;
+    let kjValue = kj?.value;
+    let kcalValue = kcal?.value;
 
-    const kjText = kjValue != null ? `${formatNumber(kjValue, kj!.unit)} ${kj!.unit}` : "";
+    if (basis === "per_100g") {
+      if (kjValue != null) kjValue = toPer100(kjValue, servingSize);
+      if (kcalValue != null) kcalValue = toPer100(kcalValue, servingSize);
+    }
+
+    if (canUseCustomServes) {
+      if (kjValue != null) kjValue *= customServes!;
+      if (kcalValue != null) kcalValue *= customServes!;
+    } else if (
+      basis === "custom" &&
+      Number.isFinite(customGrams) &&
+      servingSize > 0
+    ) {
+      if (kjValue != null) kjValue *= customGrams! / servingSize;
+      if (kcalValue != null) kcalValue *= customGrams! / servingSize;
+    }
+
+    const kjText =
+      kjValue != null ? `${formatNumber(kjValue, kj!.unit)} ${kj!.unit}` : "";
     const kcalText =
       kcalValue != null ? `${formatNumber(kcalValue, kcal!.unit)} ${kcal!.unit}` : "";
 
-    let valueText = "";
-    if (kjText && kcalText) valueText = `${kjText} (${kcalText})`;
-    else valueText = kjText || kcalText;
+    const valueText =
+      kjText && kcalText ? `${kjText} (${kcalText})` : kjText || kcalText;
 
     rows.push({
       id: "energy",
@@ -92,7 +120,8 @@ export function getReviewRows(label: LabelData, basis: Basis): Row[] {
     });
   }
 
-  // Other nutrients (exclude energy keys)
+  /* ---------------- Other nutrients ---------------- */
+
   const otherKeys = (Object.keys(nutrients) as NutrientKey[])
     .filter((k) => k !== "energy_kj" && k !== "energy_kcal")
     .sort((a, b) => META[a].order - META[b].order);
@@ -101,8 +130,21 @@ export function getReviewRows(label: LabelData, basis: Basis): Row[] {
     const n = nutrients[key];
     if (!n) continue;
 
-    const value =
-      basis === "per_100g" ? toPer100(n.value, label.servingSize.value) : n.value;
+    let value = n.value;
+
+    if (basis === "per_100g") {
+      value = toPer100(value, label.servingSize.value);
+    }
+
+    if (canUseCustomServes) {
+      value *= customServes!;
+    } else if (
+      basis === "custom" &&
+      Number.isFinite(customGrams) &&
+      label.servingSize.value > 0
+    ) {
+      value *= customGrams! / label.servingSize.value;
+    }
 
     rows.push({
       id: key,
@@ -115,13 +157,40 @@ export function getReviewRows(label: LabelData, basis: Basis): Row[] {
   return rows;
 }
 
-export function buildPlainText(label: LabelData, basis: Basis) {
+
+export function buildPlainText(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number,
+  mode: "label" | "consumption" = "label"
+) {
   const lines: string[] = [];
+
+  if (label.name) {
+    lines.push(`Food: ${label.name}`);
+  }
 
   lines.push(servingSizeLine(label, basis));
 
-  // Plain text export uses the same combined rows
-  const rows = getReviewRows(label, basis);
+  if (mode === "consumption") {
+    lines.push("Mode: Consumption (derived)");
+
+    if (Number.isFinite(customServes)) {
+      lines.push(`Serves eaten: ${customServes}`);
+    }
+
+    if (Number.isFinite(customGrams)) {
+      lines.push(`Grams eaten: ${customGrams}`);
+    }
+
+    lines.push(
+      "Calculation note: Derived from label serving size and macros."
+    );
+  }
+
+
+  const rows = getReviewRows(label, basis, customGrams, customServes);
   for (const r of rows) {
     lines.push(`${r.label}: ${r.valueText}`);
   }
@@ -129,15 +198,43 @@ export function buildPlainText(label: LabelData, basis: Basis) {
   return lines.join("\n");
 }
 
-export function buildMarkdown(label: LabelData, basis: Basis) {
+
+export function buildMarkdown(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number,
+  mode: "label" | "consumption" = "label"
+) {
   const lines: string[] = [];
 
-  // Serving size line (no bold, no asterisks)
+  if (label.name) {
+    lines.push(`Food: ${label.name}`);
+  }
+
+
   lines.push(servingSizeLine(label, basis));
   lines.push("");
 
-  const rows = getReviewRows(label, basis);
+  if (mode === "consumption") {
+    lines.push("Mode: Consumption (derived)");
 
+    if (Number.isFinite(customServes)) {
+      lines.push(`- Serves eaten: ${customServes}`);
+    }
+
+    if (Number.isFinite(customGrams)) {
+      lines.push(`- Grams eaten: ${customGrams}`);
+    }
+
+    lines.push(
+      "- Calculation note: Derived from label serving size and macros."
+    );
+    lines.push("");
+  }
+
+
+  const rows = getReviewRows(label, basis, customGrams, customServes);
   for (const r of rows) {
     lines.push(`- ${r.label}: ${r.valueText}`);
   }
@@ -145,39 +242,69 @@ export function buildMarkdown(label: LabelData, basis: Basis) {
   return lines.join("\n");
 }
 
-export function buildCSV(label: LabelData, basis: Basis) {
+
+export function buildCSV(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number,
+  mode: "label" | "consumption" = "label"
+) {
   const lines: string[] = [];
 
   const servingRaw = `${label.servingSize.value}${label.servingSize.unit}`;
-  const servingDisplay = servingSizeText(label, basis); // e.g. "60g" or "60g → 100g"
+  const servingDisplay = servingSizeText(label, basis);
 
-  // Header
   lines.push("Field,Value,Unit");
 
-  // Metadata rows (so serving size is never lost)
-  lines.push(`Basis,${basis === "per_serve" ? "per serve" : "per 100 g"},`);
-  lines.push(`Serving size,${servingRaw},`);
-  if (basis === "per_100g") {
-    lines.push(`Normalised to,100,g`);
-    lines.push(`Normalisation note,"${servingDisplay}",`);
-  }
+  // ---- Metadata (corpus / analytics safe) ----
+if (label.name) {
+  lines.push(`Food,"${label.name.replace(/"/g, '""')}",`);
+}
 
-  // Blank line separator (optional; harmless in Sheets/Excel)
-  lines.push(",,");
+lines.push(`Export mode,${mode},`);
+lines.push(
+  `Basis,${
+    basis === "per_serve"
+      ? "per serve"
+      : basis === "per_100g"
+      ? "per 100 g"
+      : "custom"
+  },`
+);
+
+lines.push(
+  `Serving size,${label.servingSize.value},${label.servingSize.unit}`
+);
+
+if (Number.isFinite(customServes)) {
+  lines.push(`Serves eaten,${customServes},`);
+}
+
+if (Number.isFinite(customGrams)) {
+  lines.push(`Grams eaten,${customGrams},`);
+}
+
+if (mode === "consumption") {
+  lines.push(
+    `Calculation note,"Derived from label serving size and macros.",`
+  );
+}
+
+// Separator
+lines.push(",,");
+
+
   lines.push("Nutrient,Value,Unit");
 
-  const rows = getReviewRows(label, basis);
-
+  const rows = getReviewRows(label, basis, customGrams, customServes);
   for (const r of rows) {
-    // Most rows look like: "20 g" or "367 mg"
     const simple = r.valueText.match(/^(-?[\d.]+)\s([a-zA-Z]+)$/);
 
     if (simple) {
       const [, value, unit] = simple;
       lines.push(`${r.label},${value},${unit}`);
     } else {
-      // Energy combined row: "1250 kJ (300 kcal)" or any complex text
-      // Quote Value and leave Unit blank.
       const escaped = r.valueText.replace(/"/g, '""');
       lines.push(`${r.label},"${escaped}",`);
     }
@@ -185,3 +312,97 @@ export function buildCSV(label: LabelData, basis: Basis) {
 
   return lines.join("\n");
 }
+
+
+// ---------- Consumption exports (derived) ----------
+
+export function buildConsumptionPlainText(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number
+) {
+  const lines: string[] = [];
+
+  if (label.name) lines.push(`Food: ${label.name}`);
+  lines.push("Mode: Consumption (derived)");
+  lines.push(servingSizeLine(label, basis));
+
+  if (Number.isFinite(customServes)) lines.push(`Serves eaten: ${customServes}`);
+  if (Number.isFinite(customGrams)) lines.push(`Grams eaten: ${customGrams}`);
+
+  lines.push(
+    'Calculation note: Derived from label serving size and macros.'
+  );
+  lines.push("");
+
+  const rows = getReviewRows(label, "custom", customGrams, customServes);
+  for (const r of rows) {
+    lines.push(`${r.label}: ${r.valueText}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function buildConsumptionMarkdown(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number
+) {
+  const lines: string[] = [];
+
+  if (label.name) lines.push(`Food: ${label.name}`);
+  lines.push("Mode: Consumption (derived)");
+  lines.push(servingSizeLine(label, basis));
+  lines.push("");
+
+  if (Number.isFinite(customServes)) lines.push(`- Serves eaten: ${customServes}`);
+  if (Number.isFinite(customGrams)) lines.push(`- Grams eaten: ${customGrams}`);
+  lines.push(`- Calculation note: Derived from label serving size and macros.`);
+  lines.push("");
+
+  const rows = getReviewRows(label, "custom", customGrams, customServes);
+  for (const r of rows) {
+    lines.push(`- ${r.label}: ${r.valueText}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function buildConsumptionCSV(
+  label: LabelData,
+  basis: Basis,
+  customGrams?: number,
+  customServes?: number
+) {
+  const lines: string[] = [];
+
+  lines.push("Field,Value,Unit");
+  if (label.name) lines.push(`Food,"${label.name.replace(/"/g, '""')}",`);
+  lines.push(`Mode,Consumption,`);
+  lines.push(`Serving size,${label.servingSize.value},${label.servingSize.unit}`);
+
+  if (Number.isFinite(customServes)) lines.push(`Serves eaten,${customServes},`);
+  if (Number.isFinite(customGrams)) lines.push(`Grams eaten,${customGrams},`);
+
+  lines.push(`Calculation note,"Derived from label serving size and macros.",`);
+  lines.push(",,");
+
+  lines.push("Nutrient,Value,Unit");
+
+  const rows = getReviewRows(label, "custom", customGrams, customServes);
+  for (const r of rows) {
+    const simple = r.valueText.match(/^(-?[\d.]+)\s([a-zA-Z]+)$/);
+    if (simple) {
+      const [, value, unit] = simple;
+      lines.push(`${r.label},${value},${unit}`);
+    } else {
+      const escaped = r.valueText.replace(/"/g, '""');
+      lines.push(`${r.label},"${escaped}",`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
