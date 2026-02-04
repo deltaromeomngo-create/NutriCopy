@@ -58,7 +58,18 @@ module.exports = async function handler(req, res) {
 
     // DEV BYPASS (local only)
     if (!DEV) {
-      const subscribed = await isSubscribedForRequest(req, res);
+      let subscribed = false;
+
+      try {
+        subscribed = await isSubscribedForRequest(req, res);
+      } catch (err) {
+        console.error("[ocr] subscription check failed:", err);
+        return res.status(503).json({
+          error: "SUBSCRIPTION_CHECK_FAILED",
+          message: "Could not verify subscription. Please try again.",
+        });
+      }
+
       if (!subscribed) {
         return res.status(403).json({
           error: "NOT_SUBSCRIBED",
@@ -66,6 +77,7 @@ module.exports = async function handler(req, res) {
         });
       }
     }
+
 
 
     const body = await readJsonBody(req);

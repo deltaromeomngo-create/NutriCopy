@@ -478,7 +478,12 @@ function isServingUnit(x: any): x is "g" | "ml" {
 }
 
 
-type ErrorState = null | "OCR_FAILED" | "SUBSCRIPTION_REQUIRED";
+type ErrorState =
+  | "OCR_FAILED"
+  | "SUBSCRIPTION_REQUIRED"
+  | "SUBSCRIPTION_CHECK_FAILED"
+  | null;
+
 
 export default function Index() {
   const [loading, setLoading] = useState(false);
@@ -526,7 +531,15 @@ export default function Index() {
           throw new Error("NOT_SUBSCRIBED");
         }
 
+        if (
+          payload?.code === "SUBSCRIPTION_CHECK_FAILED" ||
+          payload?.error === "SUBSCRIPTION_CHECK_FAILED"
+        ) {
+          throw new Error("SUBSCRIPTION_CHECK_FAILED");
+        }
+
         throw new Error("OCR_FAILED");
+
       }
 
       const data = await res.json();
@@ -541,11 +554,14 @@ export default function Index() {
 
       router.push("/review");
     } catch (err: any) {
-      if (err?.message === "NOT_SUBSCRIBED") {
-        setError("SUBSCRIPTION_REQUIRED");
-      } else {
-        setError("OCR_FAILED");
-      }
+  if (err?.message === "NOT_SUBSCRIBED") {
+    setError("SUBSCRIPTION_REQUIRED");
+  } else if (err?.message === "SUBSCRIPTION_CHECK_FAILED") {
+    setError("SUBSCRIPTION_CHECK_FAILED");
+  } else {
+    setError("OCR_FAILED");
+  }
+
     } finally {
       setLoading(false);
       setIsDragging(false);
@@ -673,61 +689,82 @@ export default function Index() {
 
           {loading && <ActivityIndicator />}
 
-          {error === "OCR_FAILED" && (
-            <View
-              style={{
-                marginTop: 8,
-                padding: 12,
-                borderRadius: 8,
-                backgroundColor: "#fdecea",
-                maxWidth: 520,
-              }}
-            >
-              <Text style={{ color: "#b00020", fontWeight: "600" }}>
-                We couldn’t read this image.
-              </Text>
-              <Text style={{ color: "#b00020", marginTop: 4 }}>
-                Try a clearer photo with the full nutrition table visible.
-              </Text>
-            </View>
-          )}
+                    {error === "OCR_FAILED" && (
+                      <View
+                      style={{
+                        marginTop: 8,
+                        padding: 12,
+                        borderRadius: 8,
+                        backgroundColor: "#fdecea",
+                        maxWidth: 520,
+                      }}
+                    >
+                      <Text style={{ color: "#b00020", fontWeight: "600" }}>
+                        We couldn’t read this image.
+                      </Text>
+                      <Text style={{ color: "#b00020", marginTop: 4 }}>
+                        Try a clearer photo with the full nutrition table visible.
+                      </Text>
+                    </View>
+                  )}
 
-          {error === "SUBSCRIPTION_REQUIRED" && (
-            <View
-              style={{
-                marginTop: 8,
-                padding: 12,
-                borderRadius: 8,
-                backgroundColor: "#eef3ff",
-                maxWidth: 520,
-                gap: 8,
-              }}
-            >
-              <Text style={{ color: "#243a8f", fontWeight: "600" }}>
-                Subscription required
-              </Text>
-              <Text style={{ color: "#243a8f" }}>
-                Scanning labels requires an active subscription.
-              </Text>
+                  {error === "SUBSCRIPTION_CHECK_FAILED" && (
+                    <View
+                      style={{
+                        marginTop: 8,
+                        padding: 12,
+                        borderRadius: 8,
+                        backgroundColor: "#fff4e5",
+                        maxWidth: 520,
+                        gap: 6,
+                      }}
+                    >
+                      <Text style={{ color: "#8a4b00", fontWeight: "600" }}>
+                        Couldn’t verify subscription
+                      </Text>
+                      <Text style={{ color: "#8a4b00" }}>
+                        We couldn’t verify your subscription right now. Please try again.
+                      </Text>
+                    </View>
+                  )}
 
-              <HoverPressable
-                onPress={async () => {
-                  const r = await fetch("/api/checkout", { method: "POST" });
-                  const { checkoutUrl } = await r.json();
-                  window.location.href = checkoutUrl;
-                }}
-                style={{
-                  marginTop: 6,
-                  padding: 10,
-                  borderWidth: 1,
-                  borderRadius: 8,
-                  alignItems: "center",
-                }}
-              >
-                <Text>Subscribe to continue</Text>
-              </HoverPressable>
-            </View>
-          )}
+                  {error === "SUBSCRIPTION_REQUIRED" && (
+                    <View
+                      style={{
+                        marginTop: 8,
+                        padding: 12,
+                        borderRadius: 8,
+                        backgroundColor: "#eef3ff",
+                        maxWidth: 520,
+                        gap: 8,
+                      }}
+                    >
+                      <Text style={{ color: "#243a8f", fontWeight: "600" }}>
+                        Subscription required
+                      </Text>
+                      <Text style={{ color: "#243a8f" }}>
+                        Scanning labels requires an active subscription.
+                      </Text>
+
+                      <HoverPressable
+                        onPress={async () => {
+                          const r = await fetch("/api/checkout", { method: "POST" });
+                          const { checkoutUrl } = await r.json();
+                          window.location.href = checkoutUrl;
+                        }}
+                        style={{
+                          marginTop: 6,
+                          padding: 10,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          alignItems: "center",
+                        }}
+                      >
+                        <Text>Subscribe to continue</Text>
+                      </HoverPressable>
+                    </View>
+                  )}
+
         </div>
       )}
 
