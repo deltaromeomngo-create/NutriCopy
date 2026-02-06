@@ -496,8 +496,7 @@ export default function Index() {
 
   const hasLabel = !!getCurrentLabel();
 
-  const apiUrl =
-    Platform.OS === "web" ? "http://localhost:3000/api/ocr" : "/api/ocr";
+  const apiUrl = "/api/ocr";
 
   async function runOCRFromFile(file: File) {
     setLoading(true);
