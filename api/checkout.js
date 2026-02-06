@@ -26,6 +26,10 @@ module.exports = async function handler(req, res) {
     // Ensure session cookie exists
     const sid = getOrCreateSessionId(req, res);
 
+    // Derive origin for success/cancel URLs (works on Vercel + local)
+    const origin =
+      (req.headers && req.headers.origin) || `https://${req.headers.host}`;
+
     // Create checkout session
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -39,9 +43,8 @@ module.exports = async function handler(req, res) {
       // Link Stripe session back to our anonymous session
       client_reference_id: sid,
 
-      // These can be updated later; placeholders are fine for now
-      success_url: "http://localhost:3000/?checkout=success",
-      cancel_url: "http://localhost:3000/?checkout=cancel",
+      success_url: `${origin}/?checkout=success`,
+      cancel_url: `${origin}/?checkout=cancel`,
 
       allow_promotion_codes: true,
     });
@@ -53,6 +56,7 @@ module.exports = async function handler(req, res) {
     console.error("[checkout] error:", err);
     return res.status(500).json({
       error: "Checkout failed",
+      message: String(err?.message || err),
     });
   }
 };
