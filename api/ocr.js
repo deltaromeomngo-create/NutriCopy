@@ -71,6 +71,9 @@ module.exports = async function handler(req, res) {
       let subscribed = false;
 
       try {
+
+        console.log("[ocr] KV available:", !!require("@vercel/kv").kv);
+        
         subscribed = await isSubscribedForRequest(req, res);
       } catch (err) {
         console.error("[ocr] subscription check failed:", err);

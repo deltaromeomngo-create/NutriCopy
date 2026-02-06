@@ -26,9 +26,21 @@ module.exports = async function handler(req, res) {
     // Ensure session cookie exists
     const sid = getOrCreateSessionId(req, res);
 
+    if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_PRICE_ID) {
+      return res.status(500).json({
+        error: "Stripe not configured",
+      });
+    }
+
+    
+
     // Derive origin for success/cancel URLs (works on Vercel + local)
     const origin =
-      (req.headers && req.headers.origin) || `https://${req.headers.host}`;
+      req.headers.origin ||
+      (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : `http://localhost:3000`);
+
 
     // Create checkout session
     const session = await stripe.checkout.sessions.create({
