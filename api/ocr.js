@@ -56,8 +56,10 @@ module.exports = async function handler(req, res) {
       process.env.NODE_ENV !== "production" ||
       process.env.VERCEL_ENV === "development";
 
+    const FORCE = process.env.FORCE_SUB_GATE === "1";  
+
     // DEV BYPASS (local only)
-    if (!DEV) {
+    if (!DEV || FORCE) {
       let subscribed = false;
 
       try {
