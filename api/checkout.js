@@ -36,10 +36,10 @@ module.exports = async function handler(req, res) {
 
     // Derive origin for success/cancel URLs (works on Vercel + local)
     const origin =
-      req.headers.origin ||
-      (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : `http://localhost:3000`);
+      process.env.VERCEL_ENV === "production"
+        ? "https://nutri-copy-22vy.vercel.app"
+        : req.headers.origin || `https://${req.headers.host}`;
+
 
 
     // Create checkout session
