@@ -511,9 +511,11 @@ export default function Index() {
 
       const res = await fetch(apiUrl, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64, debug: true, }),
+        body: JSON.stringify({ imageBase64, debug: true }),
       });
+
 
       if (!res.ok) {
         let payload: any;
