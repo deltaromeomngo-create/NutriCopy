@@ -30,8 +30,16 @@ async function readJsonBody(req) {
 module.exports = async function handler(req, res) {
   try {
     // --- CORS (preflight-safe) ---
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const origin = req.headers.origin;
+
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+
+    res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+
 
     const acrh = req.headers["access-control-request-headers"];
     res.setHeader(
