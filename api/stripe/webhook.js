@@ -71,6 +71,20 @@ module.exports = async function handler(req, res) {
         break;
       }
 
+      case "invoice.paid": {
+        const invoice = event.data.object;
+        const customerId = invoice.customer;
+
+        if (customerId) {
+          await setCustomerEntitlement(customerId, {
+            subscribed: true,
+            status: "active",
+          });
+        }
+        break;
+      }
+
+
       case "customer.subscription.deleted": {
         const sub = event.data.object;
         const customerId = sub.customer;
