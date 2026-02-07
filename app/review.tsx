@@ -672,9 +672,9 @@ const mostlyLowConfidence =
           >
         <input
           type="number"
-          min={0.1}
-          step={0.1}
-          inputMode="decimal"
+          min={1}
+          step={1}
+          inputMode="numeric"
           placeholder={wantsServes ? "e.g. 2" : "e.g. 150"}
           value={wantsServes ? customServes ?? "" : customGrams ?? ""}
           onChange={(e) => {
@@ -728,66 +728,124 @@ const mostlyLowConfidence =
 
 
 
-
-      {/* Nutrients */}
-     {EXPECTED_NUTRIENTS.map((n) => {
-        // ---- GUARD: prevent duplicate Energy rows ----
-        if (
-          n.key === "energy_kcal" &&
-          rows.some((r) => r.id === "energy")
-        ) {
-          return null;
+<View
+  style={
+    Platform.OS === "web"
+      ? {
+          flexDirection: "row",
+          alignItems: "flex-start",
+          width: "100%",
+           maxWidth: 1000,
+          marginTop: 12,
+          gap: 64,
         }
+      : { marginTop: 12 }
+  }
+>
+  {/* Left: nutrients */}
+  <View
+  style={
+    Platform.OS === "web"
+      ? { width: 520, maxWidth: 520, flexShrink: 0 }
+      : undefined
+  }
+>
 
-        // ---- Row resolution ----
-        const row =
-          n.key === "energy_kj" || n.key === "energy_kcal"
-            ? rows.find((r) => r.id === "energy")
-            : rows.find((r) => r.id === n.key);
+    {EXPECTED_NUTRIENTS.map((n) => {
+      // prevent duplicate Energy rows
+      if (n.key === "energy_kcal" && rows.some((r) => r.id === "energy")) {
+        return null;
+      }
 
-        if (row) {
-          return (
-            <Text key={n.key}>
+      const row =
+        n.key === "energy_kj" || n.key === "energy_kcal"
+          ? rows.find((r) => r.id === "energy")
+          : rows.find((r) => r.id === n.key);
+
+      if (row) {
+        return (
+          <View key={n.key} style={{ marginBottom: 12 }}>
+            <Text style={{ lineHeight: 24 }}>
               {row.label}: {row.valueText}{" "}
               <Text style={{ color: confidenceColor(row.confidence) }}>
                 {confidenceDot(row.confidence)}
               </Text>
             </Text>
-          );
-        }
-
-        return (
-          <View key={n.key} style={{ marginBottom: 4 }}>
-            <Text style={{ color: "#999" }}>{n.label}: —</Text>
-            <Text style={{ fontSize: 12, color: "#999" }}>
-              Not detected
-            </Text>
           </View>
         );
-      })}
+      } 
 
+
+      return (
+        <View key={n.key} style={{ marginBottom: 12 }}>
+          <Text style={{ color: "#999", lineHeight: 24 }}>{n.label}: —</Text>
+          <Text style={{ fontSize: 12, color: "#999" }}>Not detected</Text>
+        </View>
+      );
+
+    })}
+
+    <Text style={{ color: "#666", fontSize: 12, marginTop: 10 }}>
+      ● Confidence shows how clearly the value appeared on the label
+    </Text>
+
+    <Link href="/confidence" asChild>
+      <Pressable>
+        <Text
+          style={{
+            fontSize: 12,
+            color: "#4c6ef5",
+            textDecorationLine: "underline",
+            marginTop: 2,
+          }}
+        >
+          Confidence explained
+        </Text>
+      </Pressable>
+    </Link>
+  </View>
+
+  {/* Right: image (web only, spacing preserved) */}
+  {Platform.OS === "web" ? (
+    (label as any)?.imageBase64 ? (
+      <View
+        style={{
+          width: 360,
+          flexShrink: 0,
+          borderWidth: 1,
+          borderColor: "#ddd",
+          borderRadius: 10,
+          padding: 10,
+          backgroundColor: "#fafafa",
+        }}
+      >
+        <img
+          src={`data:image/jpeg;base64,${(label as any).imageBase64}`}
+          style={{
+            width: "100%",
+            height: "auto",
+            display: "block",
+            borderRadius: 6,
+          }}
+        />
+        <Text
+          style={{
+            fontSize: 12,
+            color: "#666",
+            marginTop: 8,
+            textAlign: "center",
+          }}
+        >
+          Original label
+        </Text>
+      </View>
+    ) : (
+      <View style={{ width: 360, flexShrink: 0 }} />
+    )
+  ) : null}
+</View>
 
       
-        <Text style={{ color: "#666", fontSize: 12 }}>
-          ● Confidence shows how clearly the value appeared on the label
-        </Text>
-
-        <Link href="/confidence" asChild>
-          <Pressable>
-            <Text
-              style={{
-                fontSize: 12,
-                color: "#4c6ef5",
-                textDecorationLine: "underline",
-                marginTop: 2,
-              }}
-            >
-              Confidence explained
-            </Text>
-          </Pressable>
-        </Link>
-
-
        
 
       {/* Dev Debug Toggle */}
