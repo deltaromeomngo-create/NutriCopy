@@ -633,7 +633,7 @@ export default function Index() {
       <Text style={{ fontSize: 24 }}>Scan</Text>
 
       <Text style={{ fontSize: 14, color: "#666", textAlign: "center" }}>
-        Turn nutrition labels into clean, copyable data.
+        Upload nutrition labels → clean data you control.{"\n"}
       </Text>
 
       <Text
@@ -646,9 +646,8 @@ export default function Index() {
           lineHeight: 18,
         }}
       >
-        Scan nutrition labels → clean data you control.{"\n"}
+        
         Use it anywhere — sheets, notes, trackers, your own system. Built for how you actually eat.{"\n"}
-        Adapts math to realistic sizes — not what the label assumes.
       </Text>
 
 
@@ -817,7 +816,24 @@ export default function Index() {
         <HoverPressable disabled style={{ ...buttonStyle, opacity: 0.4 }}>
           <Text>Export Last Input</Text>
         </HoverPressable>
+
       )}
+
+      <Text
+        style={{
+          fontSize: 15,
+          color: "#777",
+          textAlign: "center",
+          marginTop: 14,
+          maxWidth: 520,
+          lineHeight: 18,
+        }}
+      >
+        Not another food diary — your macros, your way.
+      </Text>
+
     </View>
   );
 }
+
+

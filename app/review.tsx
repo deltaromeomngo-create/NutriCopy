@@ -634,6 +634,7 @@ const mostlyLowConfidence =
 
       {Platform.OS === "web" && (
         <View style={{ gap: 6, maxWidth: 260, marginTop: 8 }}>
+
           <View
             style={{
               flexDirection: "row",
@@ -662,69 +663,68 @@ const mostlyLowConfidence =
 
 
 
-          <View
-            style={{
-              padding: 8,
-              borderWidth: 1,
-              borderRadius: 6,
-              borderColor: "#ccc",
-            }}
-          >
-        <input
-          type="number"
-          min={1}
-          step={1}
-          inputMode="numeric"
-          placeholder={wantsServes ? "e.g. 2" : "e.g. 150"}
-          value={wantsServes ? customServes ?? "" : customGrams ?? ""}
-          onChange={(e) => {
-            const raw = (e.target as HTMLInputElement).value;
+        <View
+  style={{
+    padding: 8,
+    borderWidth: 1,
+    borderRadius: 6,
+    borderColor: "#ccc",
+  }}
+>
+  <input
+    type="number"
+    min={1}
+    step={1}
+    inputMode="numeric"
+    placeholder={wantsServes ? "e.g. 2" : "e.g. 150"}
+    value={wantsServes ? customServes ?? "" : customGrams ?? ""}
+    onChange={(e) => {
+      const raw = (e.target as HTMLInputElement).value;
 
-            if (raw === "") {
-              setCustomGrams(null);
-              setCustomServes(null);
-              setCustomGrams(null);
-              setCustomServes(null);
-              commitConsumption(null, null);
-              return;
-            }
+      if (raw === "") {
+        setCustomGrams(null);
+        setCustomServes(null);
+        commitConsumption(null, null);
+        return;
+      }
 
-            const v = Number(raw);
+      const v = Number(raw);
 
-            if (Number.isFinite(v) && v > 0) {
-              if (wantsServes) {
-                setCustomServes(v);
-                setCustomGrams(null);
-                commitConsumption(null, v);
-              } else {
-                setCustomGrams(v);
-                setCustomServes(null);
-                commitConsumption(v, null);
-              }
-            }
+      if (Number.isFinite(v) && v > 0) {
+        if (wantsServes) {
+          setCustomServes(v);
+          setCustomGrams(null);
+          commitConsumption(null, v);
+        } else {
+          setCustomGrams(v);
+          setCustomServes(null);
+          commitConsumption(v, null);
+        }
+      }
+    }}
+    style={{
+      width: "100%",
+      border: "none",
+      outline: "none",
+      fontSize: 14,
+      background: "transparent",
+    }}
+  />
+</View>
 
-          }}
-          style={{
-            width: "100%",
-            border: "none",
-            outline: "none",
-            fontSize: 14,
-            background: "transparent",
-          }}
-        />
-
-                  </View>
-
-                  {(customGrams != null || customServes != null) && (
-                    <Text style={{ fontSize: 11, color: "#888" }}>
-                      Conversions are calculated from the label’s serving size and macros. Please
-                      double-check values before exporting.
-                    </Text>
-                  )}
-                </View>
-              )}
-
-
+{(customGrams != null || customServes != null) && (
+  <View style={{ gap: 4, marginTop: 6 }}>
+    <Text style={{ fontSize: 12, color: "#666" }}>
+      Adapts math to realistic sizes — not what the label assumes.
+    </Text>
+    <Text style={{ fontSize: 11, color: "#888" }}>
+      Conversions are calculated from the label’s serving size and macros. Please
+      double-check values before exporting.
+    </Text>
+  </View>
+)}
+</View>
+)}
 
 
 

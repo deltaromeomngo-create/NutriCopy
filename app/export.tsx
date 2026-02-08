@@ -352,7 +352,7 @@ const effectiveCustomServes =
       {Platform.OS === "web" && (
         <View style={{ gap: 4 }}>
           <Text style={{ fontSize: 12, color: "#666" }}>
-            File name
+            File name (Download)
           </Text>
           <TextInput
             value={filename}
