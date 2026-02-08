@@ -68,8 +68,6 @@ module.exports = async function handler(req, res) {
 
     // DEV BYPASS (local only)
     if (!DEV || FORCE) {
-      console.log("[ocr] DEV:", DEV, "FORCE:", FORCE);
-
       let subscribed = false;
 
       try {
@@ -86,7 +84,6 @@ module.exports = async function handler(req, res) {
       }
 
       if (!subscribed) {
-        console.log("[ocr] subscribed:", subscribed);
         return res.status(403).json({
           error: "NOT_SUBSCRIBED",
           message: "Subscription required to scan labels",
