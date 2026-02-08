@@ -1,11 +1,11 @@
 // app/export.tsx
 import { Link, useLocalSearchParams } from "expo-router";
-import { useMemo, useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { useMemo, useRef, useState } from "react";
+import { Animated, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { copyToClipboard } from "../lib/clipboard";
+import { downloadTextFile } from "../lib/exportDownload.web";
 import { getCurrentLabel, updateCurrentLabel } from "../lib/labelStore";
 import type { Basis } from "../lib/nutritionFormat";
-
 import {
   buildCSV,
   buildMarkdown,
@@ -23,7 +23,20 @@ export default function Export() {
   const [basis, setBasis] = useState<Basis>(initialBasis);
   const [format, setFormat] = useState<ExportFormat>("plain");
   const [copied, setCopied] = useState(false);
-  
+  const [copiedHintVisible, setCopiedHintVisible] = useState(false);
+  const hintOpacity = useRef(new Animated.Value(0)).current;
+
+    const defaultFilename = useMemo(() => {
+      const d = new Date();
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = String(d.getFullYear());
+      return `nutricopy-export-${dd}-${mm}-${yyyy}`;
+    }, []);
+
+
+  const [filename, setFilename] = useState(defaultFilename);
+
 
   const label = getCurrentLabel();
 
@@ -168,8 +181,63 @@ const effectiveCustomServes =
 
       await copyToClipboard(text);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+
+      // reset opacity immediately
+      hintOpacity.setValue(0);
+
+      // fade in
+      Animated.timing(hintOpacity, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }).start(() => {
+        // linger, then fade out
+        setTimeout(() => {
+          Animated.timing(hintOpacity, {
+            toValue: 0,
+            duration: 500,
+            useNativeDriver: true,
+          }).start();
+        }, 1200);
+      });
+
+      setTimeout(() => setCopied(false), 2000);
     }
+
+      function getDownloadMeta() {
+          const raw = filename.trim();
+          const baseName = raw.length > 0 ? raw : defaultFilename;
+
+          const safeName = baseName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+
+
+        if (format === "csv") {
+          return { filename: `${safeName}.csv`, mime: "text/csv" };
+        }
+
+        if (format === "markdown") {
+          return { filename: `${safeName}.md`, mime: "text/markdown" };
+        }
+
+        return { filename: `${safeName}.txt`, mime: "text/plain" };
+
+  }
+
+    function handleDownload() {
+    if (Platform.OS !== "web") return;
+
+    const { filename, mime } = getDownloadMeta();
+
+    downloadTextFile({
+      filename,
+      content: text,
+      mime,
+    });
+  }
+
 
 
 
@@ -280,6 +348,33 @@ const effectiveCustomServes =
         {text}
       </Text>
 
+      {/* Filename (web only) */}
+      {Platform.OS === "web" && (
+        <View style={{ gap: 4 }}>
+          <Text style={{ fontSize: 12, color: "#666" }}>
+            File name
+          </Text>
+          <TextInput
+            value={filename}
+            onChangeText={setFilename}
+            placeholder="nutricopy-export"
+            style={{
+              padding: 10,
+              borderWidth: 1,
+              borderRadius: 8,
+            }}
+          />
+          <Text style={{ fontSize: 11, color: "#999" }}>
+            Extension is added automatically
+          </Text>
+        </View>
+      )}
+
+
+
+
+
+
       {/* Copy */}
       <Pressable
         onPress={handleCopy}
@@ -294,6 +389,52 @@ const effectiveCustomServes =
           {copied ? "Copied ✓" : `Copy (${copyLabel})`}
         </Text>
       </Pressable>
+
+      {/* Download (web only) */}
+      {Platform.OS === "web" && (
+        <Pressable
+          onPress={handleDownload}
+          style={{
+            padding: 12,
+            borderWidth: 1,
+            borderRadius: 8,
+          }}
+        >
+          <Text>Download ({copyLabel})</Text>
+        </Pressable>
+      )}
+
+
+
+      <View style={{ height: 18, marginTop: 6 }}>
+        <Animated.Text
+          style={{
+            opacity: hintOpacity,
+            fontSize: 12,
+            color: "#666",
+            textAlign: "center",
+          }}
+        >
+          Your data — unrestricted. Paste into sheets, notes, or any tracker.
+        </Animated.Text>
+      </View>
+
+
+      {/* Ownership hint (appears after copy) */}
+      {copiedHintVisible && (
+        <Text
+          style={{
+            marginTop: 6,
+            fontSize: 12,
+            color: "#666",
+            textAlign: "center",
+            maxWidth: 420,
+          }}
+        >
+          Your data — unrestricted. Paste into sheets, notes, or any tracker.
+        </Text>
+      )}
+
 
       <Link href="/review" asChild>
         <Pressable style={{ padding: 12, borderWidth: 1, borderRadius: 8 }}>

@@ -636,6 +636,23 @@ export default function Index() {
         Turn nutrition labels into clean, copyable data.
       </Text>
 
+      <Text
+        style={{
+          fontSize: 15,
+          color: "#777",
+          textAlign: "center",
+          marginTop: 6,
+          maxWidth: 520,
+          lineHeight: 18,
+        }}
+      >
+        Scan nutrition labels → clean data you control.{"\n"}
+        Use it anywhere — sheets, notes, trackers, your own system. Built for how you actually eat.{"\n"}
+        Adapts math to realistic sizes — not what the label assumes.
+      </Text>
+
+
+
       {Platform.OS === "web" && (
         <div
           onDragEnter={onDragEnter}
