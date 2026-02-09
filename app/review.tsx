@@ -950,7 +950,7 @@ const mostlyLowConfidence =
       {/* Navigation */}
       <Link href="/export" asChild>
         <Pressable style={{ padding: 12, borderWidth: 1, borderRadius: 8 }}>
-          <Text>Go to Export</Text>
+          <Text>Export</Text>
         </Pressable>
       </Link>
 
