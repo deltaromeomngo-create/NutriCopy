@@ -764,11 +764,15 @@ export default function Index() {
                       </Text>
 
                       <HoverPressable
-                        onPress={async () => {
-                          const r = await fetch("/api/checkout", { method: "POST" });
+                       onPress={async () => {
+                          const r = await fetch("/api/checkout", {
+                            method: "POST",
+                            credentials: "include",
+                          });
                           const { checkoutUrl } = await r.json();
                           window.location.href = checkoutUrl;
                         }}
+
                         style={{
                           marginTop: 6,
                           padding: 10,
