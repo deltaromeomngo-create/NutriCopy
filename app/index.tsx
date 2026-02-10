@@ -773,6 +773,7 @@ export default function Index() {
                           window.location.href = checkoutUrl;
                         }}
 
+
                         style={{
                           marginTop: 6,
                           padding: 10,

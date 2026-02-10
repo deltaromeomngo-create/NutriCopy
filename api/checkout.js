@@ -14,7 +14,14 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 module.exports = async function handler(req, res) {
   try {
     // --- CORS (preflight-safe) ---
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const corsOrigin = req.headers.origin;
+
+    if (corsOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+      res.setHeader("Vary", "Origin");
+    }
+
+    res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
@@ -22,6 +29,7 @@ module.exports = async function handler(req, res) {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method Not Allowed" });
     }
+
 
     // Ensure session cookie exists
     const sid = getOrCreateSessionId(req, res);
@@ -35,11 +43,10 @@ module.exports = async function handler(req, res) {
     
 
     // Derive origin for success/cancel URLs (works on Vercel + local)
-    const origin =
+    const redirectOrigin =
       process.env.VERCEL_ENV === "production"
         ? "https://nutri-copy-22vy.vercel.app"
         : req.headers.origin || `https://${req.headers.host}`;
-
 
 
     // Create checkout session
@@ -55,8 +62,9 @@ module.exports = async function handler(req, res) {
       // Link Stripe session back to our anonymous session
       client_reference_id: sid,
 
-      success_url: `${origin}/?checkout=success`,
-      cancel_url: `${origin}/?checkout=cancel`,
+      success_url: `${redirectOrigin}/?checkout=success`,
+      cancel_url: `${redirectOrigin}/?checkout=cancel`,
+
 
       allow_promotion_codes: true,
     });
