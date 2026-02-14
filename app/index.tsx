@@ -633,7 +633,7 @@ export default function Index() {
       <Text style={{ fontSize: 24 }}>Scan</Text>
 
       <Text style={{ fontSize: 14, color: "#666", textAlign: "center" }}>
-        Upload nutrition labels → clean data you control.{"\n"}
+        Turn any nutrition label into structured, export-ready macro data.{"\n"}
       </Text>
 
       <Text
@@ -647,7 +647,7 @@ export default function Index() {
         }}
       >
         
-        Use it anywhere — sheets, notes, trackers, your own system. Built for how you actually eat.{"\n"}
+        Built for spreadsheet users, custom trackers, and people who don’t want another food diary.{"\n"}
       </Text>
 
 
